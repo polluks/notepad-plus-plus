@@ -104,6 +104,7 @@
     #define    IDM_EDIT_INS_TAB                     (IDM_EDIT + 8)
     #define    IDM_EDIT_RMV_TAB                     (IDM_EDIT + 9)
     #define    IDM_EDIT_DUP_LINE                    (IDM_EDIT + 10)
+    #define    IDM_EDIT_REMOVE_DUP_LINES            (IDM_EDIT + 77)
     #define    IDM_EDIT_TRANSPOSE_LINE              (IDM_EDIT + 11)
     #define    IDM_EDIT_SPLIT_LINES                 (IDM_EDIT + 12)
     #define    IDM_EDIT_JOIN_LINES                  (IDM_EDIT + 13)
@@ -556,7 +557,9 @@
 	#define	   IDM_TOOL_MD5_GENERATE  	            (IDM_TOOL + 1)
 	#define	   IDM_TOOL_MD5_GENERATEFROMFILE  	    (IDM_TOOL + 2)
 	#define	   IDM_TOOL_MD5_GENERATEINTOCLIPBOARD  	(IDM_TOOL + 3)
-
+	#define	   IDM_TOOL_SHA256_GENERATE  	            (IDM_TOOL + 4)
+	#define	   IDM_TOOL_SHA256_GENERATEFROMFILE  	    (IDM_TOOL + 5)
+	#define	   IDM_TOOL_SHA256_GENERATEINTOCLIPBOARD  	(IDM_TOOL + 6)
 
 #define    IDM_EXECUTE  (IDM + 9000)
 

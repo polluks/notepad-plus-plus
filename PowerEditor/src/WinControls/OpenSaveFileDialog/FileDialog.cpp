@@ -62,7 +62,7 @@ FileDialog::FileDialog(HWND hwnd, HINSTANCE hInst)
 	_ofn.lpfnHook = NULL;
 	_ofn.lpstrDefExt = NULL;  // No default extension
 	_ofn.lCustData = 0;
-	_ofn.Flags = OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_LONGNAMES | DS_CENTER | OFN_HIDEREADONLY;
+	_ofn.Flags = OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_LONGNAMES | OFN_HIDEREADONLY;
 	_ofn.pvReserved = NULL;
 	_ofn.dwReserved = 0;
 	_ofn.FlagsEx = 0;
@@ -122,7 +122,7 @@ int FileDialog::setExtsFilter(const TCHAR *extText, const TCHAR *exts)
 	extFilter += TEXT(")");	
 	
 	// Resize filter buffer
-	int nbCharAdditional = static_cast<int32_t>(extFilter.length() + lstrlen(exts) + 3); // 3 additional for nulls
+	int nbCharAdditional = static_cast<int32_t>(extFilter.length() + _tcsclen(exts) + 3); // 3 additional for nulls
 	if (_fileExt)
 	{
 		oldFilter = new TCHAR[_nbCharFileExt];
@@ -146,12 +146,14 @@ int FileDialog::setExtsFilter(const TCHAR *extText, const TCHAR *exts)
 
 	// Append new filter    
     TCHAR *pFileExt = _fileExt + _nbCharFileExt;
-	lstrcpy(pFileExt, extFilter.c_str());
-	_nbCharFileExt += static_cast<int32_t>(extFilter.length()) + 1;
+	auto curLen = extFilter.length() + 1;
+	wcscpy_s(pFileExt, curLen, extFilter.c_str());
+	_nbCharFileExt += static_cast<int32_t>(curLen);
     
     pFileExt = _fileExt + _nbCharFileExt;
-	lstrcpy(pFileExt, exts);
-    _nbCharFileExt += lstrlen(exts) + 1;
+	curLen = _tcsclen(exts) + 1;
+	wcscpy_s(pFileExt, curLen, exts);
+	_nbCharFileExt += static_cast<int32_t>(curLen);
 
 	// Set file dialog pointer
 	_ofn.lpstrFilter = _fileExt;
@@ -175,21 +177,31 @@ TCHAR* FileDialog::doOpenSingleFileDlg()
 	}
 
 	TCHAR *fn = NULL;
-	try {
-		fn = ::GetOpenFileName(&_ofn)?_fileName:NULL;
-		
+	try
+	{
+		fn = ::GetOpenFileName(&_ofn) ? _fileName : NULL;
+
 		if (params->getNppGUI()._openSaveDir == dir_last)
 		{
 			::GetCurrentDirectory(MAX_PATH, dir);
 			params->setWorkingDir(dir);
 		}
-	} catch(std::exception& e) {
-		::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
-	} catch(...) {
+	}
+	catch (std::exception& e)
+	{
+		generic_string msg = TEXT("An exception occurred while opening file: ");
+		msg += _fileName;
+		msg += TEXT("\r\n\r\nException reason: ");
+		msg += s2ws(e.what());
+
+		::MessageBox(NULL, msg.c_str(), TEXT("File Open Exception"), MB_OK);
+	}
+	catch (...)
+	{
 		::MessageBox(NULL, TEXT("doOpenSingleFileDlg crashes!!!"), TEXT(""), MB_OK);
 	}
 
-	::SetCurrentDirectory(dir); 
+	::SetCurrentDirectory(dir);
 
 	return (fn);
 }
@@ -230,7 +242,7 @@ stringVector * FileDialog::doOpenMultiFilesDlg()
 		}
 		else
 		{
-			lstrcpy(fn, _fileName);
+			wcscpy_s(fn, _fileName);
 			if (fn[lstrlen(fn) - 1] != '\\')
 				lstrcat(fn, TEXT("\\"));
 		}
@@ -251,7 +263,7 @@ stringVector * FileDialog::doOpenMultiFilesDlg()
 }
 
 
-TCHAR * FileDialog::doSaveDlg() 
+TCHAR * FileDialog::doSaveDlg()
 {
 	TCHAR dir[MAX_PATH];
 	::GetCurrentDirectory(MAX_PATH, dir);
@@ -268,20 +280,30 @@ TCHAR * FileDialog::doSaveDlg()
 	}
 
 	TCHAR *fn = NULL;
-	try {
-		fn = ::GetSaveFileName(&_ofn)?_fileName:NULL;
+	try
+	{
+		fn = ::GetSaveFileName(&_ofn) ? _fileName : NULL;
 		if (params->getNppGUI()._openSaveDir == dir_last)
 		{
 			::GetCurrentDirectory(MAX_PATH, dir);
 			params->setWorkingDir(dir);
 		}
-	} catch(std::exception& e) {
-		::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
-	} catch(...) {
+	}
+	catch (std::exception& e)
+	{
+		generic_string msg = TEXT("An exception occurred while saving file: ");
+		msg += _fileName;
+		msg += TEXT("\r\n\r\nException reason: ");
+		msg += s2ws(e.what());
+
+		::MessageBox(NULL, msg.c_str(), TEXT("File Save Exception"), MB_OK);
+	}
+	catch (...)
+	{
 		::MessageBox(NULL, TEXT("GetSaveFileName crashes!!!"), TEXT(""), MB_OK);
 	}
 
-	::SetCurrentDirectory(dir); 
+	::SetCurrentDirectory(dir);
 
 	return (fn);
 }

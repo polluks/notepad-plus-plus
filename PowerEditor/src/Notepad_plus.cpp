@@ -398,29 +398,8 @@ LRESULT Notepad_plus::init(HWND hwnd)
 	_scintillaCtrls4Plugins.init(_pPublicInterface->getHinst(), hwnd);
 	_pluginsManager.init(nppData);
 
-	// If Notepad++ is not in localConf mode, load plugins firstly from "%APPDATA%/Local/Notepad++/plugins"
-	// All the dll loaded are marked.
-	generic_string localAppDataNppPluginsDir = pNppParam->getLocalAppDataNppDir();
-	if (!localAppDataNppPluginsDir.empty() && !pNppParam->isLocal())
-	{
-		PathAppend(localAppDataNppPluginsDir, TEXT("plugins"));
-		_pluginsManager.loadPluginsV2(localAppDataNppPluginsDir.c_str());
-	}
-
-	// obsolet
-	bool isLoadFromAppDataAllow = ::SendMessage(_pPublicInterface->getHSelf(), NPPM_GETAPPDATAPLUGINSALLOWED, 0, 0) == TRUE;
-	const TCHAR *appDataNpp = pNppParam->getAppDataNppDir();
-	if (appDataNpp[0] && isLoadFromAppDataAllow)
-		_pluginsManager.loadPlugins(appDataNpp);
-
-
-	// Load plugins from its installation directory.
-	// All loaded dll will be ignored
-	_pluginsManager.loadPluginsV2();
-	_pluginsManager.loadPlugins(); // obsolet
-
+	_pluginsManager.loadPluginsV2(pNppParam->getPluginRootDir());
     _restoreButton.init(_pPublicInterface->getHinst(), hwnd);
-
 
 	// ------------ //
 	// Menu Section //
@@ -644,10 +623,18 @@ LRESULT Notepad_plus::init(HWND hwnd)
     _aboutDlg.init(_pPublicInterface->getHinst(), hwnd);
 	_debugInfoDlg.init(_pPublicInterface->getHinst(), hwnd, _isAdministrator, _pluginsManager.getLoadedPluginNames());
 	_runDlg.init(_pPublicInterface->getHinst(), hwnd);
-	_md5FromFilesDlg.init(_pPublicInterface->getHinst(), hwnd);
-	_md5FromTextDlg.init(_pPublicInterface->getHinst(), hwnd);
 	_runMacroDlg.init(_pPublicInterface->getHinst(), hwnd);
 	_documentPeeker.init(_pPublicInterface->getHinst(), hwnd);
+
+	_md5FromFilesDlg.init(_pPublicInterface->getHinst(), hwnd);
+	_md5FromFilesDlg.setHashType(hash_md5);
+	_md5FromTextDlg.init(_pPublicInterface->getHinst(), hwnd);
+	_md5FromTextDlg.setHashType(hash_md5);
+	_sha2FromFilesDlg.init(_pPublicInterface->getHinst(), hwnd);
+	_sha2FromFilesDlg.setHashType(hash_sha256);
+	_sha2FromTextDlg.init(_pPublicInterface->getHinst(), hwnd);
+	_sha2FromTextDlg.setHashType(hash_sha256);
+
 
     //--User Define Dialog Section--//
 	int uddStatus = nppGUI._userDefineDlgStatus;
@@ -941,8 +928,7 @@ void Notepad_plus::saveDockingParams()
 
 void Notepad_plus::saveUserDefineLangs()
 {
-	if (ScintillaEditView::getUserDefineDlg()->isDirty())
-		(NppParameters::getInstance())->writeUserDefinedLang();
+	(NppParameters::getInstance())->writeNeed2SaveUDL();
 }
 
 
@@ -991,7 +977,7 @@ int Notepad_plus::getHtmlXmlEncoding(const TCHAR *fileName) const
 	_invisibleEditView.execute(SCI_APPENDTEXT, lenFile, reinterpret_cast<LPARAM>(data));
 
 	const char *encodingAliasRegExpr = "[a-zA-Z0-9_-]+";
-
+	const size_t encodingStrLen = 128;
 	if (langT == L_XML)
 	{
 		// find encoding by RegExpr
@@ -1017,13 +1003,19 @@ int Notepad_plus::getHtmlXmlEncoding(const TCHAR *fileName) const
 
             startPos = int(_invisibleEditView.execute(SCI_GETTARGETSTART));
 			endPos = _invisibleEditView.execute(SCI_GETTARGETEND);
+			
+			size_t len = endPos - startPos;
+			if (len >= encodingStrLen)
+			{
+				return -1;
+			}
 
-            char encodingStr[128];
+            char encodingStr[encodingStrLen];
             _invisibleEditView.getText(encodingStr, startPos, endPos);
 
 			EncodingMapper *em = EncodingMapper::getInstance();
             int enc = em->getEncodingFromString(encodingStr);
-            return (enc==CP_ACP?-1:enc);
+            return (enc == CP_ACP ? -1 : enc);
 		}
         return -1;
 	}
@@ -1056,12 +1048,18 @@ int Notepad_plus::getHtmlXmlEncoding(const TCHAR *fileName) const
         startPos = int(_invisibleEditView.execute(SCI_GETTARGETSTART));
 		endPos = _invisibleEditView.execute(SCI_GETTARGETEND);
 
-        char encodingStr[128];
+		size_t len = endPos - startPos;
+		if (len >= encodingStrLen)
+		{
+			return -1;
+		}
+
+        char encodingStr[encodingStrLen];
         _invisibleEditView.getText(encodingStr, startPos, endPos);
 
 		EncodingMapper *em = EncodingMapper::getInstance();
 		int enc = em->getEncodingFromString(encodingStr);
-        return (enc==CP_ACP?-1:enc);
+        return (enc == CP_ACP ? -1 : enc);
 	}
 }
 
@@ -1404,6 +1402,23 @@ void Notepad_plus::removeEmptyLine(bool isBlankContained)
 	{
 		env._str2Search = TEXT("(\\r\\n|\\r|\\n)^$");
 	}
+	_findReplaceDlg.processAll(ProcessReplaceAll, &env, true);
+}
+
+void Notepad_plus::removeDuplicateLines()
+{
+	// whichPart : line head or line tail
+	FindOption env;
+
+	env._str2Search = TEXT("^(.*\\r?\\n)(\\1)+");
+	env._str4Replace = TEXT("\\1");
+    env._searchType = FindRegex;
+	_findReplaceDlg.processAll(ProcessReplaceAll, &env, true);
+
+	// remove the last line if it's a duplicate line.
+	env._str2Search = TEXT("^(.+)\\r?\\n(\\1)");
+	env._str4Replace = TEXT("\\1");
+    env._searchType = FindRegex;
 	_findReplaceDlg.processAll(ProcessReplaceAll, &env, true);
 }
 
@@ -2465,11 +2480,12 @@ void Notepad_plus::addHotSpot()
 
 			hotspotStyle._styleID = static_cast<int>(style_hotspot);
 			_pEditView->execute(SCI_STYLEGETFONT, idStyleMSBunset, reinterpret_cast<LPARAM>(fontNameA));
-			TCHAR *generic_fontname = new TCHAR[128];
+			const size_t generic_fontnameLen = 128;
+			TCHAR *generic_fontname = new TCHAR[generic_fontnameLen];
 
 			WcharMbcsConvertor *wmc = WcharMbcsConvertor::getInstance();
 			const wchar_t * fontNameW = wmc->char2wchar(fontNameA, _nativeLangSpeaker.getLangEncoding());
-			lstrcpy(generic_fontname, fontNameW);
+			wcscpy_s(generic_fontname, generic_fontnameLen, fontNameW);
 			hotspotStyle._fontName = generic_fontname;
 
 			hotspotStyle._fgColor = static_cast<COLORREF>(_pEditView->execute(SCI_STYLEGETFORE, idStyleMSBunset));
@@ -2570,6 +2586,11 @@ void Notepad_plus::maintainIndentation(TCHAR ch)
 	int tabWidth = static_cast<int32_t>(_pEditView->execute(SCI_GETTABWIDTH));
 
 	LangType type = _pEditView->getCurrentBuffer()->getLangType();
+
+	// Do not alter indentation if we were at the beginning of the line and we pressed Enter
+	if ((((eolMode == SC_EOL_CRLF || eolMode == SC_EOL_LF) && ch == '\n') ||
+		(eolMode == SC_EOL_CR && ch == '\r')) && prevLine >= 0 && _pEditView->getLineLength(prevLine) == 0)
+		return;
 
 	if (type == L_C || type == L_CPP || type == L_JAVA || type == L_CS || type == L_OBJC ||
 		type == L_PHP || type == L_JS || type == L_JAVASCRIPT || type == L_JSP || type == L_CSS)
@@ -3528,12 +3549,8 @@ int Notepad_plus::switchEditViewTo(int gid)
 
 	_activeView = newView;
 	//Good old switcheroo
-	DocTabView * tempTab = _pDocTab;
-	_pDocTab = _pNonDocTab;
-	_pNonDocTab = tempTab;
-	ScintillaEditView * tempView = _pEditView;
-	_pEditView = _pNonEditView;
-	_pNonEditView = tempView;
+	std::swap(_pDocTab, _pNonDocTab);
+	std::swap(_pEditView, _pNonEditView);
 
 	_pEditView->beSwitched();
     _pEditView->getFocus();	//set the focus
@@ -3743,14 +3760,22 @@ bool Notepad_plus::activateBuffer(BufferID id, int whichOne)
 	if (whichOne == MAIN_VIEW)
 	{
 		if (_mainDocTab.activateBuffer(id))	//only activate if possible
+		{
+			_isFolding = true;
 			_mainEditView.activateBuffer(id);
+			_isFolding = false;
+		}
 		else
 			return false;
 	}
 	else
 	{
 		if (_subDocTab.activateBuffer(id))
+		{
+			_isFolding = true;
 			_subEditView.activateBuffer(id);
+			_isFolding = false;
+		}
 		else
 			return false;
 	}
@@ -3944,9 +3969,10 @@ void Notepad_plus::showFunctionComp()
 static generic_string extractSymbol(TCHAR firstChar, TCHAR secondChar, const TCHAR *str2extract)
 {
 	bool found = false;
-	TCHAR extracted[128] = TEXT("");
+	const size_t extractedLen = 128;
+	TCHAR extracted[extractedLen] = {'\0'};
 
-	for (size_t i = 0, j = 0, len = lstrlen(str2extract) ; i < len ; ++i)
+	for (size_t i = 0, j = 0, len = lstrlen(str2extract) ; i < len && j < extractedLen - 1; ++i)
 	{
 		if (found)
 		{
@@ -3956,7 +3982,6 @@ static generic_string extractSymbol(TCHAR firstChar, TCHAR secondChar, const TCH
 				return generic_string(extracted);
 			}
 			extracted[j++] = str2extract[i];
-
 		}
 		else
 		{
@@ -5459,6 +5484,52 @@ vector<generic_string> Notepad_plus::addNppComponents(const TCHAR *destDir, cons
     return copiedFiles;
 }
 
+vector<generic_string> Notepad_plus::addNppPlugins(const TCHAR *extFilterName, const TCHAR *extFilter)
+{
+	FileDialog fDlg(_pPublicInterface->getHSelf(), _pPublicInterface->getHinst());
+    fDlg.setExtFilter(extFilterName, extFilter, NULL);
+
+    vector<generic_string> copiedFiles;
+
+    if (stringVector *pfns = fDlg.doOpenMultiFilesDlg())
+    {
+        // Get plugins dir
+		generic_string destDirName = (NppParameters::getInstance())->getPluginRootDir();
+
+        if (!::PathFileExists(destDirName.c_str()))
+        {
+            ::CreateDirectory(destDirName.c_str(), NULL);
+        }
+
+        size_t sz = pfns->size();
+        for (size_t i = 0 ; i < sz ; ++i)
+        {
+            if (::PathFileExists(pfns->at(i).c_str()))
+            {
+                // copy to plugins directory
+                generic_string destName = destDirName;
+				
+				generic_string nameExt = ::PathFindFileName(pfns->at(i).c_str());
+				auto pos = nameExt.find_last_of(TEXT("."));
+				if (pos == generic_string::npos)
+					continue;
+
+				generic_string name = nameExt.substr(0, pos);
+				PathAppend(destName, name);
+				if (!::PathFileExists(destName.c_str()))
+				{
+					::CreateDirectory(destName.c_str(), NULL);
+				}
+				PathAppend(destName, nameExt);
+
+                if (::CopyFile(pfns->at(i).c_str(), destName.c_str(), FALSE))
+                    copiedFiles.push_back(destName.c_str());
+            }
+        }
+    }
+    return copiedFiles;
+}
+
 void Notepad_plus::setWorkingDir(const TCHAR *dir)
 {
 	NppParameters * params = NppParameters::getInstance();
@@ -5661,6 +5732,16 @@ bool Notepad_plus::reloadLang()
 		_nativeLangSpeaker.changeDlgLang(_md5FromTextDlg.getHSelf(), "MD5FromTextDlg");
 	}
 
+	if (_sha2FromFilesDlg.isCreated())
+	{
+		_nativeLangSpeaker.changeDlgLang(_sha2FromFilesDlg.getHSelf(), "SHA256FromFilesDlg");
+	}
+
+	if (_sha2FromTextDlg.isCreated())
+	{
+		_nativeLangSpeaker.changeDlgLang(_sha2FromTextDlg.getHSelf(), "SHA256FromTextDlg");
+	}
+
 	if (_runMacroDlg.isCreated())
 	{
 		_nativeLangSpeaker.changeDlgLang(_runMacroDlg.getHSelf(), "MultiMacro");
@@ -5674,6 +5755,11 @@ bool Notepad_plus::reloadLang()
 	if (_colEditorDlg.isCreated())
 	{
         _nativeLangSpeaker.changeDlgLang(_colEditorDlg.getHSelf(), "ColumnEditor");
+	}
+
+	if (_pluginsAdminDlg.isCreated())
+	{
+		_nativeLangSpeaker.changePluginsAdminDlgLang(_pluginsAdminDlg);
 	}
 
 	UserDefineDialog *udd = _pEditView->getUserDefineDlg();
@@ -5713,7 +5799,7 @@ void Notepad_plus::launchClipboardHistoryPanel()
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5756,7 +5842,7 @@ void Notepad_plus::launchFileSwitcherPanel()
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5797,7 +5883,7 @@ void Notepad_plus::launchAnsiCharPanel()
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5841,7 +5927,7 @@ void Notepad_plus::launchFileBrowser(const vector<generic_string> & folders)
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5898,7 +5984,7 @@ void Notepad_plus::launchProjectPanel(int cmdID, ProjectPanel ** pProjPanel, int
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5950,7 +6036,7 @@ void Notepad_plus::launchDocMap()
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 		::SendMessage(_pPublicInterface->getHSelf(), NPPM_DMMREGASDCKDLG, 0, reinterpret_cast<LPARAM>(&data));
@@ -5991,7 +6077,7 @@ void Notepad_plus::launchFunctionList()
 		static TCHAR title[32];
 		if (title_temp.length() < 32)
 		{
-			lstrcpy(title, title_temp.c_str());
+			wcscpy_s(title, title_temp.c_str());
 			data.pszName = title;
 		}
 
@@ -6068,7 +6154,7 @@ static const QuoteParams quotes[] =
 	{TEXT("Anonymous #3"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("I'm not totally useless. I can be used as a bad example.")},
 	{TEXT("Anonymous #4"), QuoteParams::rapid, false, SC_CP_UTF8, L_TEXT, TEXT("Life is too short to remove USB safely.")},
 	{TEXT("Anonymous #5"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("\"SEX\" is not the answer.\nSex is the question, \"YES\" is the answer.")},
-	{TEXT("Anonymous #6"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Going to Mc Donald's for a salad is like going to a whore for a hug.")},
+	{TEXT("Anonymous #6"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Going to McDonald's for a salad is like going to a whore for a hug.")},
 	{TEXT("Anonymous #7"), QuoteParams::slow, false, SC_CP_UTF8, L_TEXT, TEXT("I need a six month holiday, TWICE A YEAR!")},
 	{TEXT("Anonymous #8"), QuoteParams::slow, false, SC_CP_UTF8, L_TEXT, TEXT("Everything is a knife if you're strong enough.")},
 	{TEXT("Anonymous #9"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("I'M A FUCKING ANIMAL IN BED.\nMore specifically a koala.")},
@@ -6141,7 +6227,7 @@ static const QuoteParams quotes[] =
 	{TEXT("Anonymous #76"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Even if being gay were a choice, so what?\nPeople choose to be assholes and they can get married.")},
 	{TEXT("Anonymous #77"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Governments are like diapers.\nThey should be changed often, and for the same reason.")},
 	{TEXT("Anonymous #78"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("If you expect the world to be fair with you because you are fair, you're fooling yourself.\nThat's like expecting the lion not to eat you because you didn't eat him.")},
-	{TEXT("Anonymous #79"), QuoteParams::slow, true, SC_CP_UTF8, L_TEXT, TEXT("I'm a creationist.\nI believe man create God.")},
+	{TEXT("Anonymous #79"), QuoteParams::slow, true, SC_CP_UTF8, L_TEXT, TEXT("I'm a creationist.\nI believe man created God.")},
 	{TEXT("Anonymous #80"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Let's eat kids.\nLet's eat, kids.\n\nUse a comma.\nSave lives.")},
 	{TEXT("Anonymous #81"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("A male engineering student was crossing a road one day when a frog called out to him and said, \"If you kiss me, I'll turn into a beautiful princess.\" He bent over, picked up the frog, and put it in his pocket.\n\nThe frog spoke up again and said, \"If you kiss me and turn me back into a beautiful princess, I will stay with you for one week.\" The engineering student took the frog out of his pocket, smiled at it; and returned it to his pocket.\n\nThe frog then cried out, \"If you kiss me and turn me back into a princess, I'll stay with you and do ANYTHING you want.\" Again the boy took the frog out, smiled at it, and put it back into his pocket.\n\nFinally, the frog asked, \"What is the matter? I've told you I'm a beautiful princess, that I'll stay with you for a week and do anything you want. Why won't you kiss me?\" The boy said, \"Look I'm an engineer. I don't have time for a girlfriend, but a talking frog is cool.\"\n")},
 	{TEXT("Anonymous #82"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Gamers never die.\nThey just go offline.")},
@@ -6157,7 +6243,7 @@ static const QuoteParams quotes[] =
 	{TEXT("Anonymous #92"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Mondays are not so bad.\nIt's your job that sucks.")},
 	{TEXT("Anonymous #93"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("[In a job interview]\nInterviewer: What's your greatest weakness?\nCandidate: Honesty.\nInterviewer: I don't think honesty is a weakness.\nCandidate: I don't give a fuck what you think.")},
 	{TEXT("Anonymous #94"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Hey, I just met you\nAnd this is crazy\nHere's my number 127.0.0.1\nPing me maybe?")},
-	{TEXT("Anonymous #95"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("What if the spider you killed in your house had spend his entire life thinking you were his roomate?\nEver think aboutn that?\nNo. You only think about yourself.\n")},
+	{TEXT("Anonymous #95"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("What if the spider you killed in your house had spent his entire life thinking you were his roomate?\nEver think about that?\nNo. You only think about yourself.\n")},
 	{TEXT("Anonymous #96"), QuoteParams::slow, false, SC_CP_UTF8, L_TEXT, TEXT("Code for 6 minutes, debug for 6 hours.")},
 	{TEXT("Anonymous #97"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Real Programmers don't comment their code.\nIf it was hard to write, it should be hard to read.")},
 	{TEXT("Anonymous #98"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("My neighbours listen to good music.\nWhether they like it or not.")},
@@ -6217,6 +6303,7 @@ static const QuoteParams quotes[] =
 	{TEXT("Anonymous #153"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("You are not fat, you are just more visible.")},
 	{TEXT("Anonymous #154"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Minimalist\n (.   .)\n  )   (\n (  Y  )\nASCII Art")},
 	{TEXT("Internet #1"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("If you spell \"Nothing\" backwards, it becomes \"Gnihton\" which also means nothing.")},
+	{TEXT("Internet #404"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("Quote not Found")},
 	{TEXT("Mary Oliver"), QuoteParams::rapid, false, SC_CP_UTF8, L_TEXT, TEXT("Someone I loved once gave me a box full of darkness.\nIt took me years to understand that this, too, was a gift.")},
 	{TEXT("Floor"), QuoteParams::slow, true, SC_CP_UTF8, L_TEXT, TEXT("If you fall, I will be there.")},
 	{TEXT("Simon Amstell"), QuoteParams::rapid, true, SC_CP_UTF8, L_TEXT, TEXT("If you have some problem in your life and need to deal with it, then use religion, that's fine.\nI use Google.")},

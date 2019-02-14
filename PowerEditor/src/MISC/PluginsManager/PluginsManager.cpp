@@ -114,7 +114,7 @@ cleanup: // release all of our handles
 	return machine_type;
 }
 
-int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_string> & dll2Remove)
+int PluginsManager::loadPlugin(const TCHAR *pluginFilePath)
 {
 	const TCHAR *pluginFileName = ::PathFindFileName(pluginFilePath);
 	if (isInLoadedDlls(pluginFileName))
@@ -211,7 +211,7 @@ int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_strin
 			}
 
 			TCHAR xmlPath[MAX_PATH];
-            lstrcpy(xmlPath, nppParams->getNppPath().c_str());
+			wcscpy_s(xmlPath, nppParams->getNppPath().c_str());
 			PathAppend(xmlPath, TEXT("plugins\\Config"));
             PathAppend(xmlPath, pi->_moduleName.c_str());
 			PathRemoveExtension(xmlPath);
@@ -220,7 +220,7 @@ int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_strin
 			if (!PathFileExists(xmlPath))
 			{
 				lstrcpyn(xmlPath, TEXT("\0"), MAX_PATH );
-				lstrcpy(xmlPath, nppParams->getAppDataNppDir() );
+				wcscpy_s(xmlPath, nppParams->getAppDataNppDir() );
 				PathAppend(xmlPath, TEXT("plugins\\Config"));
                 PathAppend(xmlPath, pi->_moduleName.c_str());
 				PathRemoveExtension( xmlPath );
@@ -259,7 +259,7 @@ int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_strin
 	}
 	catch (std::exception& e)
 	{
-		::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
+		pluginExceptionAlert(pluginFileName, e);
 		return -1;
 	}
 	catch (generic_string s)
@@ -269,7 +269,7 @@ int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_strin
 		s += USERMSG;
 		if (::MessageBox(NULL, s.c_str(), pluginFilePath, MB_YESNO) == IDYES)
 		{
-			dll2Remove.push_back(pluginFilePath);
+			::DeleteFile(pluginFilePath);
 		}
 		delete pi;
         return -1;
@@ -282,66 +282,11 @@ int PluginsManager::loadPlugin(const TCHAR *pluginFilePath, vector<generic_strin
 		msg += USERMSG;
 		if (::MessageBox(NULL, msg.c_str(), pluginFilePath, MB_YESNO) == IDYES)
 		{
-			dll2Remove.push_back(pluginFilePath);
+			::DeleteFile(pluginFilePath);
 		}
 		delete pi;
         return -1;
 	}
-}
-
-
-bool PluginsManager::loadPlugins(const TCHAR *dir)
-{
-	if (_isDisabled)
-		return false;
-
-	vector<generic_string> dllNames;
-	vector<generic_string> dll2Remove;
-	NppParameters * nppParams = NppParameters::getInstance();
-    generic_string nppPath = nppParams->getNppPath();
-	generic_string pluginsFullPathFilter = (dir && dir[0])?dir:nppPath;
-
-	pluginsFullPathFilter += TEXT("\\plugins\\*.dll");
-
-	WIN32_FIND_DATA foundData;
-	HANDLE hFindFile = ::FindFirstFile(pluginsFullPathFilter.c_str(), &foundData);
-	if (hFindFile != INVALID_HANDLE_VALUE)
-	{
-		generic_string plugins1stFullPath = (dir && dir[0])?dir:nppPath;
-		plugins1stFullPath += TEXT("\\plugins\\");
-		plugins1stFullPath += foundData.cFileName;
-		dllNames.push_back(plugins1stFullPath);
-
-		while (::FindNextFile(hFindFile, &foundData))
-		{
-            bool isInBlackList = nppParams->isInBlackList(foundData.cFileName);
-            if (!isInBlackList)
-            {
-			    generic_string fullPath = (dir && dir[0])?dir:nppPath;
-			    fullPath += TEXT("\\plugins\\");
-
-			    fullPath += foundData.cFileName;
-			    dllNames.push_back(fullPath);
-            }
-            PluginList & pl = nppParams->getPluginList();
-            pl.add(foundData.cFileName, isInBlackList);
-		}
-		::FindClose(hFindFile);
-
-
-		for (size_t i = 0, len = dllNames.size(); i < len ; ++i)
-		{
-            loadPlugin(dllNames[i].c_str(),  dll2Remove);
-		}
-
-	}
-
-	for (size_t j = 0, len = dll2Remove.size() ; j < len ; ++j)
-		::DeleteFile(dll2Remove[j].c_str());
-
-	std::sort(_pluginInfos.begin(), _pluginInfos.end(), [](const PluginInfo *a, const PluginInfo *b) { return a->_funcName < b->_funcName; });
-
-	return true;
 }
 
 bool PluginsManager::loadPluginsV2(const TCHAR* dir)
@@ -349,9 +294,7 @@ bool PluginsManager::loadPluginsV2(const TCHAR* dir)
 	if (_isDisabled)
 		return false;
 
-
 	vector<generic_string> dllNames;
-	vector<generic_string> dll2Remove;
 
 	NppParameters * nppParams = NppParameters::getInstance();
 	generic_string nppPath = nppParams->getNppPath();
@@ -376,40 +319,53 @@ bool PluginsManager::loadPluginsV2(const TCHAR* dir)
 	// get plugin folder
 	if (hFindFolder != INVALID_HANDLE_VALUE && (foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 	{
-		generic_string pluginsFullPathFilter = pluginsFolder;
-		PathAppend(pluginsFullPathFilter, foundData.cFileName);
-		generic_string pluginsFolderPath = pluginsFullPathFilter;
-		generic_string  dllName = foundData.cFileName;
-		dllName += TEXT(".dll");
-		PathAppend(pluginsFullPathFilter, dllName);
-
-		// get plugin
-		hFindDll = ::FindFirstFile(pluginsFullPathFilter.c_str(), &foundData);
-		if (hFindDll != INVALID_HANDLE_VALUE && !(foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		generic_string foundFileName = foundData.cFileName;
+		if (foundFileName != TEXT(".") && foundFileName != TEXT("..") && generic_stricmp(foundFileName.c_str(), TEXT("Config")) != 0)
 		{
-			dllNames.push_back(pluginsFullPathFilter);
+			generic_string pluginsFullPathFilter = pluginsFolder;
+			PathAppend(pluginsFullPathFilter, foundFileName);
+			generic_string pluginsFolderPath = pluginsFullPathFilter;
+			generic_string  dllName = foundFileName;
+			dllName += TEXT(".dll");
+			PathAppend(pluginsFullPathFilter, dllName);
 
-			PluginList & pl = nppParams->getPluginList();
-			pl.add(foundData.cFileName, false);
+			// get plugin
+			hFindDll = ::FindFirstFile(pluginsFullPathFilter.c_str(), &foundData);
+			if (hFindDll != INVALID_HANDLE_VALUE && !(foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				dllNames.push_back(pluginsFullPathFilter);
+
+				PluginList & pl = nppParams->getPluginList();
+				pl.add(foundFileName, false);
+			}
 		}
-
 		// get plugin folder
 		while (::FindNextFile(hFindFolder, &foundData))
 		{
-			generic_string pluginsFullPathFilter2 = pluginsFolder;
-			PathAppend(pluginsFullPathFilter2, foundData.cFileName);
-			generic_string pluginsFolderPath2 = pluginsFullPathFilter2;
-			generic_string  dllName2 = foundData.cFileName;
-			dllName2 += TEXT(".dll");
-			PathAppend(pluginsFullPathFilter2, dllName2);
-			// get plugin
-			hFindDll = ::FindFirstFile(pluginsFullPathFilter2.c_str(), &foundData);
-			if (hFindDll != INVALID_HANDLE_VALUE && !(foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			generic_string foundFileName2 = foundData.cFileName;
+			if (foundFileName2 != TEXT(".") && foundFileName2 != TEXT("..") && generic_stricmp(foundFileName2.c_str(), TEXT("Config")) != 0)
 			{
-				dllNames.push_back(pluginsFullPathFilter2);
+				generic_string pluginsFullPathFilter2 = pluginsFolder;
+				PathAppend(pluginsFullPathFilter2, foundFileName2);
+				generic_string pluginsFolderPath2 = pluginsFullPathFilter2;
+				generic_string  dllName2 = foundFileName2;
+				dllName2 += TEXT(".dll");
+				PathAppend(pluginsFullPathFilter2, dllName2);
 
-				PluginList & pl = nppParams->getPluginList();
-				pl.add(foundData.cFileName, false);
+				// get plugin
+				if (hFindDll)
+				{
+					::FindClose(hFindDll);
+					hFindDll = INVALID_HANDLE_VALUE;
+				}
+				hFindDll = ::FindFirstFile(pluginsFullPathFilter2.c_str(), &foundData);
+				if (hFindDll != INVALID_HANDLE_VALUE && !(foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					dllNames.push_back(pluginsFullPathFilter2);
+
+					PluginList & pl = nppParams->getPluginList();
+					pl.add(foundFileName2, false);
+				}
 			}
 		}
 
@@ -419,7 +375,7 @@ bool PluginsManager::loadPluginsV2(const TCHAR* dir)
 
 	for (size_t i = 0, len = dllNames.size(); i < len; ++i)
 	{
-		loadPlugin(dllNames[i].c_str(), dll2Remove);
+		loadPlugin(dllNames[i].c_str());
 	}
 
 	return true;
@@ -517,10 +473,6 @@ void PluginsManager::addInMenuFromPMIndex(int i)
 		if (_pluginInfos[i]->_funcItems[j]._init2Check)
 			::CheckMenuItem(_hPluginsMenu, cmdID, MF_BYCOMMAND | MF_CHECKED);
 	}
-	/*UNLOAD
-    ::InsertMenu(_pluginInfos[i]->_pluginMenu, j++, MF_BYPOSITION | MF_SEPARATOR, 0, TEXT(""));
-    ::InsertMenu(_pluginInfos[i]->_pluginMenu, j, MF_BYPOSITION, ID_PLUGINS_REMOVING + i, TEXT("Remove this plugin"));
-	*/
 }
 
 HMENU PluginsManager::setMenu(HMENU hMenu, const TCHAR *menuName, bool enablePluginAdmin)
@@ -539,7 +491,7 @@ HMENU PluginsManager::setMenu(HMENU hMenu, const TCHAR *menuName, bool enablePlu
 			{
 				if (nbPlugin > 0)
 					::InsertMenu(_hPluginsMenu, 0, MF_BYPOSITION | MF_SEPARATOR, 0, TEXT(""));
-				::InsertMenu(_hPluginsMenu, 1, MF_BYPOSITION, IDM_SETTING_PLUGINADM, TEXT("Plugin Admin"));
+				::InsertMenu(_hPluginsMenu, 1, MF_BYPOSITION, IDM_SETTING_PLUGINADM, TEXT("Plugins Admin..."));
 			}
         }
 
@@ -592,7 +544,7 @@ void PluginsManager::runPluginCommand(const TCHAR *pluginName, int commandID)
 				}
 				catch (std::exception& e)
 				{
-					::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
+					pluginExceptionAlert(_pluginsCommands[i]._pluginName.c_str(), e);
 				}
 				catch (...)
 				{
@@ -605,7 +557,36 @@ void PluginsManager::runPluginCommand(const TCHAR *pluginName, int commandID)
 	}
 }
 
+// send the notification to a specific plugin
+void PluginsManager::notify(size_t indexPluginInfo, const SCNotification *notification)
+{
+	if (indexPluginInfo >= _pluginInfos.size())
+		return;
 
+	if (_pluginInfos[indexPluginInfo]->_hLib)
+	{
+		// To avoid the plugin change the data in SCNotification
+		// Each notification to pass to a plugin is a copy of SCNotification instance
+		SCNotification scNotif = *notification;
+		try
+		{
+			_pluginInfos[indexPluginInfo]->_pBeNotified(&scNotif);
+		}
+		catch (std::exception& e)
+		{
+			pluginExceptionAlert(_pluginInfos[indexPluginInfo]->_moduleName.c_str(), e);
+		}
+		catch (...)
+		{
+			TCHAR funcInfo[256];
+			generic_sprintf(funcInfo, TEXT("notify(SCNotification *notification) : \r notification->nmhdr.code == %d\r notification->nmhdr.hwndFrom == %p\r notification->nmhdr.idFrom == %" PRIuPTR), \
+				scNotif.nmhdr.code, scNotif.nmhdr.hwndFrom, scNotif.nmhdr.idFrom);
+			pluginCrashAlert(_pluginInfos[indexPluginInfo]->_moduleName.c_str(), funcInfo);
+		}
+	}
+}
+
+// broadcast the notification to all plugins
 void PluginsManager::notify(const SCNotification *notification)
 {
 	if (_noMoreNotification) // this boolean should be enabled after NPPN_SHUTDOWN has been sent
@@ -614,27 +595,7 @@ void PluginsManager::notify(const SCNotification *notification)
 
 	for (size_t i = 0, len = _pluginInfos.size() ; i < len ; ++i)
 	{
-        if (_pluginInfos[i]->_hLib)
-        {
-			// To avoid the plugin change the data in SCNotification
-			// Each notification to pass to a plugin is a copy of SCNotification instance
-			SCNotification scNotif = *notification;
-			try
-			{
-				_pluginInfos[i]->_pBeNotified(&scNotif);
-			}
-			catch (std::exception& e)
-			{
-				::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
-			}
-			catch (...)
-			{
-				TCHAR funcInfo[256];
-				generic_sprintf(funcInfo, TEXT("notify(SCNotification *notification) : \r notification->nmhdr.code == %d\r notification->nmhdr.hwndFrom == %p\r notification->nmhdr.idFrom == %" PRIuPTR),\
-					scNotif.nmhdr.code, scNotif.nmhdr.hwndFrom, scNotif.nmhdr.idFrom);
-				pluginCrashAlert(_pluginInfos[i]->_moduleName.c_str(), funcInfo);
-			}
-		}
+		notify(i, notification);
 	}
 }
 
@@ -651,7 +612,7 @@ void PluginsManager::relayNppMessages(UINT Message, WPARAM wParam, LPARAM lParam
 			}
 			catch (std::exception& e)
 			{
-				::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
+				pluginExceptionAlert(_pluginInfos[i]->_moduleName.c_str(), e);
 			}
 			catch (...)
 			{
@@ -682,7 +643,7 @@ bool PluginsManager::relayPluginMessages(UINT Message, WPARAM wParam, LPARAM lPa
 				}
 				catch (std::exception& e)
 				{
-					::MessageBoxA(NULL, e.what(), "Exception", MB_OK);
+					pluginExceptionAlert(_pluginInfos[i]->_moduleName.c_str(), e);
 				}
 				catch (...)
 				{

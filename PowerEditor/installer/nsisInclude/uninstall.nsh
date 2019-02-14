@@ -39,6 +39,8 @@ doesExist:
 	StrCpy $doLocalConf "true"
 noneExist:
 	;MessageBox MB_OK "doLocalConf == $doLocalConf"
+
+	Call un.setPathAndOptions
 FunctionEnd
 
 Function un.onUninstSuccess
@@ -174,9 +176,7 @@ FunctionEnd
 	Delete "$SMPROGRAMS\Notepad++\Notepad++.lnk"
 	Delete "$SMPROGRAMS\Notepad++\readme.lnk"
 
-	
 	RMDir /r "${dir2remove}"
-	
 !macroend
 
 
@@ -244,7 +244,9 @@ Section Uninstall
 	Delete "$INSTDIR\SourceCodePro-It.ttf"
 	Delete "$INSTDIR\SourceCodePro-BoldIt.ttf"
 	Delete "$INSTDIR\NppHelp.chm"
+	Delete "$INSTDIR\userDefinedLang-markdown.default.modern.xml"
 	Delete "$INSTDIR\doLocalConf.xml"
+	Delete "$INSTDIR\uninstall.ini"
 	
 	${If} $doLocalConf == "false"
 		Call un.doYouReallyWantToKeepData

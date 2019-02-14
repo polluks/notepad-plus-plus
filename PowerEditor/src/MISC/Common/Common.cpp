@@ -64,6 +64,9 @@ generic_string commafyInt(size_t n)
 
 std::string getFileContent(const TCHAR *file2read)
 {
+	if (!::PathFileExists(file2read))
+		return "";
+
 	const size_t blockSize = 1024;
 	char data[blockSize];
 	std::string wholeFileContent = "";
@@ -72,22 +75,15 @@ std::string getFileContent(const TCHAR *file2read)
 	size_t lenFile = 0;
 	do
 	{
-		lenFile = fread(data, 1, blockSize - 1, fp);
+		lenFile = fread(data, 1, blockSize, fp);
 		if (lenFile <= 0) break;
-
-		if (lenFile >= blockSize - 1)
-			data[blockSize - 1] = '\0';
-		else
-			data[lenFile] = '\0';
-
-		wholeFileContent += data;
+		wholeFileContent.append(data, lenFile);
 	}
 	while (lenFile > 0);
 
 	fclose(fp);
 	return wholeFileContent;
 }
-
 
 char getDriveLetter()
 {
@@ -330,11 +326,14 @@ bool isInList(const TCHAR *token, const TCHAR *list)
 	if ((!token) || (!list))
 		return false;
 
-	TCHAR word[64];
+	const size_t wordLen = 64;
+	size_t listLen = lstrlen(list);
+
+	TCHAR word[wordLen];
 	size_t i = 0;
 	size_t j = 0;
 
-	for (size_t len = lstrlen(list); i <= len; ++i)
+	for (; i <= listLen; ++i)
 	{
 		if ((list[i] == ' ')||(list[i] == '\0'))
 		{
@@ -351,6 +350,9 @@ bool isInList(const TCHAR *token, const TCHAR *list)
 		{
 			word[j] = list[i];
 			++j;
+
+			if (j >= wordLen)
+				return false;
 		}
 	}
 	return false;
@@ -956,7 +958,6 @@ bool str2Clipboard(const generic_string &str2cpy, HWND hwnd)
 	unsigned int clipBoardFormat = CF_UNICODETEXT;
 	if (::SetClipboardData(clipBoardFormat, hglbCopy) == NULL)
 	{
-		::GlobalUnlock(hglbCopy);
 		::GlobalFree(hglbCopy);
 		::CloseClipboard();
 		return false;
@@ -1218,7 +1219,7 @@ bool deleteFileOrFolder(const generic_string& f2delete)
 {
 	auto len = f2delete.length();
 	TCHAR* actionFolder = new TCHAR[len + 2];
-	lstrcpy(actionFolder, f2delete.c_str());
+	wcscpy_s(actionFolder, len + 2, f2delete.c_str());
 	actionFolder[len] = 0;
 	actionFolder[len + 1] = 0;
 
@@ -1237,3 +1238,29 @@ bool deleteFileOrFolder(const generic_string& f2delete)
 	delete[] actionFolder;
 	return (res == 0);
 }
+
+// Get a vector of full file paths in a given folder. File extension type filter should be *.*, *.xml, *.dll... according the type of file you want to get.  
+void getFilesInFolder(std::vector<generic_string>& files, const generic_string& extTypeFilter, const generic_string& inFolder)
+{
+	generic_string filter = inFolder;
+	PathAppend(filter, extTypeFilter);
+
+	WIN32_FIND_DATA foundData;
+	HANDLE hFindFile = ::FindFirstFile(filter.c_str(), &foundData);
+
+	if (hFindFile != INVALID_HANDLE_VALUE && !(foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		generic_string foundFullPath = inFolder;
+		PathAppend(foundFullPath, foundData.cFileName);
+		files.push_back(foundFullPath);
+
+		while (::FindNextFile(hFindFile, &foundData))
+		{
+			generic_string foundFullPath2 = inFolder;
+			PathAppend(foundFullPath2, foundData.cFileName);
+			files.push_back(foundFullPath2);
+		}
+	}
+	::FindClose(hFindFile);
+}
+

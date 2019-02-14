@@ -120,8 +120,8 @@ const int COPYDATA_FILENAMESW = 2;
 const TCHAR fontSizeStrs[][3] = {TEXT(""), TEXT("5"), TEXT("6"), TEXT("7"), TEXT("8"), TEXT("9"), TEXT("10"), TEXT("11"), TEXT("12"), TEXT("14"), TEXT("16"), TEXT("18"), TEXT("20"), TEXT("22"), TEXT("24"), TEXT("26"), TEXT("28")};
 
 const TCHAR localConfFile[] = TEXT("doLocalConf.xml");
-const TCHAR allowAppDataPluginsFile[] = TEXT("allowAppDataPlugins.xml");
 const TCHAR notepadStyleFile[] = TEXT("asNotepad.xml");
+const TCHAR pluginsForAllUsersFile[] = TEXT("pluginsForAllUsers.xml");
 
 void cutString(const TCHAR *str2cut, std::vector<generic_string> & patternVect);
 
@@ -134,7 +134,6 @@ struct Position
 	int _xOffset = 0;
 	int _selMode = 0;
 	int _scrollWidth = 1;
-	int _offset = 0;
 };
 
 
@@ -1044,7 +1043,7 @@ public:
 			}
 
 			for (int i = 0 ; i < SCE_USER_KWLIST_TOTAL ; ++i)
-				lstrcpy(this->_keywordLists[i], ulc._keywordLists[i]);
+				wcscpy_s(this->_keywordLists[i], ulc._keywordLists[i]);
 
 			for (int i = 0 ; i < SCE_USER_TOTAL_KEYWORD_GROUPS ; ++i)
 				_isPrefix[i] = ulc._isPrefix[i];
@@ -1268,15 +1267,20 @@ private:
 };
 
 
+struct UdlXmlFileState final {
+	TiXmlDocument* _udlXmlDoc = nullptr;
+	bool _isDirty = false;
+	std::pair<unsigned char, unsigned char> _indexRange;
+
+	UdlXmlFileState(TiXmlDocument* doc, bool isDirty, std::pair<unsigned char, unsigned char> range) : _udlXmlDoc(doc), _isDirty(isDirty), _indexRange(range) {};
+};
+
 const int NB_LANG = 100;
 const bool DUP = true;
 const bool FREE = false;
 
 const int RECENTFILES_SHOWFULLPATH = -1;
 const int RECENTFILES_SHOWONLYFILENAME = 0;
-
-
-
 
 class NppParameters final
 {
@@ -1415,7 +1419,9 @@ public:
 	void getExternalLexerFromXmlTree(TiXmlDocument *doc);
 	std::vector<TiXmlDocument *> * getExternalLexerDoc() { return &_pXmlExternalLexerDoc; };
 
-	void writeUserDefinedLang();
+	void writeDefaultUDL();
+	void writeNonDefaultUDL();
+	void writeNeed2SaveUDL();
 	void writeShortcuts();
 	void writeSession(const Session & session, const TCHAR *fileName = NULL);
 	bool writeFindHistory();
@@ -1494,12 +1500,15 @@ public:
 	generic_string getNppPath() const {return _nppPath;};
 	generic_string getContextMenuPath() const {return _contextMenuPath;};
 	const TCHAR * getAppDataNppDir() const {return _appdataNppDir.c_str();};
-	const TCHAR * getLocalAppDataNppDir() const { return _localAppdataNppDir.c_str(); };
+	const TCHAR * getPluginRootDir() const { return _pluginRootDir.c_str(); };
+	const TCHAR * getPluginConfDir() const { return _pluginConfDir.c_str(); };
+	const TCHAR * getUserPluginConfDir() const { return _userPluginConfDir.c_str(); };
 	const TCHAR * getWorkingDir() const {return _currentDirectory.c_str();};
 	const TCHAR * getWorkSpaceFilePath(int i) const {
 		if (i < 0 || i > 2) return nullptr;
 		return _workSpaceFilePathes[i].c_str();
-	}
+	};
+
 	const std::vector<generic_string> getFileBrowserRoots() const { return _fileBrowserRoot; };
 	void setWorkSpaceFilePath(int i, const TCHAR *wsFile);
 
@@ -1623,6 +1632,9 @@ public:
 
 	generic_string static getSpecialFolderLocation(int folderKind);
 
+	void setUdlXmlDirtyFromIndex(size_t i);
+	void setUdlXmlDirtyFromXmlDoc(const TiXmlDocument* xmlDoc);
+	void removeIndexFromXmlUdls(size_t i);
 
 private:
 	NppParameters();
@@ -1634,19 +1646,14 @@ private:
 	TiXmlDocument *_pXmlUserDoc = nullptr;
 	TiXmlDocument *_pXmlUserStylerDoc = nullptr;
 	TiXmlDocument *_pXmlUserLangDoc = nullptr;
+	std::vector<UdlXmlFileState> _pXmlUserLangsDoc;
 	TiXmlDocument *_pXmlToolIconsDoc = nullptr;
 	TiXmlDocument *_pXmlShortcutDoc = nullptr;
 	TiXmlDocument *_pXmlSessionDoc = nullptr;
 	TiXmlDocument *_pXmlBlacklistDoc = nullptr;
-	
-	TiXmlDocument *_importedULD[NB_MAX_IMPORTED_UDL];
 
 	TiXmlDocumentA *_pXmlNativeLangDocA = nullptr;
 	TiXmlDocumentA *_pXmlContextMenuDocA = nullptr;
-	
-	int _nbImportedULD;
-
-
 
 	std::vector<TiXmlDocument *> _pXmlExternalLexerDoc;
 
@@ -1667,7 +1674,7 @@ private:
 	FindHistory _findHistory;
 
 	UserLangContainer *_userLangArray[NB_MAX_USER_LANG];
-	int _nbUserLang = 0;
+	unsigned char _nbUserLang = 0; // won't be exceeded to 255;
 	generic_string _userDefineLangPath;
 	ExternalLangContainer *_externalLangArray[NB_MAX_EXTERNAL_LANG];
 	int _nbExternalLang = 0;
@@ -1724,7 +1731,9 @@ private:
 	generic_string _userPath;
 	generic_string _stylerPath;
 	generic_string _appdataNppDir; // sentinel of the absence of "doLocalConf.xml" : (_appdataNppDir == TEXT(""))?"doLocalConf.xml present":"doLocalConf.xml absent"
-	generic_string _localAppdataNppDir; // for plugins
+	generic_string _pluginRootDir; // plugins root where all the plugins are installed
+	generic_string _pluginConfDir; // plugins config dir where the plugin list is installed
+	generic_string _userPluginConfDir; // plugins config dir for per user where the plugin parameters are saved / loaded
 	generic_string _currentDirectory;
 	generic_string _workSpaceFilePathes[3];
 
@@ -1749,24 +1758,23 @@ private:
 	generic_string _wingupFullPath;
 	generic_string _wingupParams;
 	generic_string _wingupDir;
+	bool _isElevationRequired = false;
 
 public:
 	generic_string getWingupFullPath() const { return _wingupFullPath; };
 	generic_string getWingupParams() const { return _wingupParams; };
 	generic_string getWingupDir() const { return _wingupDir; };
+	bool shouldDoUAC() const { return _isElevationRequired; };
 	void setWingupFullPath(const generic_string& val2set) { _wingupFullPath = val2set; };
 	void setWingupParams(const generic_string& val2set) { _wingupParams = val2set; };
 	void setWingupDir(const generic_string& val2set) { _wingupDir = val2set; };
+	void setElevationRequired(bool val2set) { _isElevationRequired = val2set; };
 
 private:
 	void getLangKeywordsFromXmlTree();
 	bool getUserParametersFromXmlTree();
 	bool getUserStylersFromXmlTree();
-	bool getUserDefineLangsFromXmlTree(TiXmlDocument *tixmldoc);
-	bool getUserDefineLangsFromXmlTree()
-	{
-		return getUserDefineLangsFromXmlTree(_pXmlUserLangDoc);
-	}
+	std::pair<unsigned char, unsigned char> addUserDefineLangsFromXmlTree(TiXmlDocument *tixmldoc);
 
 	bool getShortcutsFromXmlTree();
 
@@ -1786,7 +1794,7 @@ private:
 	void feedProjectPanelsParameters(TiXmlNode *node);
 	void feedFileBrowserParameters(TiXmlNode *node);
 	bool feedStylerArray(TiXmlNode *node);
-	bool feedUserLang(TiXmlNode *node);
+	std::pair<unsigned char, unsigned char> feedUserLang(TiXmlNode *node);
 	void feedUserStyles(TiXmlNode *node);
 	void feedUserKeywordList(TiXmlNode *node);
 	void feedUserSettings(TiXmlNode *node);
